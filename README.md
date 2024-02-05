@@ -1,10 +1,10 @@
-# [pengqun.gotop.dev](https://pengqun.gotop.dev)
+# My Personal Blog
 
-Yet another boring personal website ? 🤔
+Yet another boring personal blog ? 🤔
 
 Possibly. But trust me, I'll try to produce something useful, besides being boring. 🐒
 
-Like I said, it's just another boring personal website. 🤷🏻‍♂️
+Like I said, it's just another boring personal blog. 🤷🏻‍♂️
 
 ## Stack
 
@@ -13,4 +13,4 @@ Like I said, it's just another boring personal website. 🤷🏻‍♂️
 
 ## License
 
-[CC0 1.0 Universal](https://github.com/pengqun/pengqun.github.io/blob/main/LICENSE) © [pengqun](https://pengqun.github.io)
+[CC0 1.0 Universal](LICENSE) © [pengqun](https://pengqun.blog)

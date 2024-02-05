@@ -6,7 +6,7 @@ const siteMetadata = {
   description: 'A blog is not just a blog, but... ok, just not a blog.',
   language: 'en-us',
   theme: 'system', // system, dark or light
-  siteUrl: 'https://pengqun.gotop.dev',
+  siteUrl: 'https://pengqun.blog',
   siteRepo: 'https://github.com/pengqun/blog',
   siteLogo: '/static/images/logo.png',
   socialBanner: '/static/images/twitter-card.png',
