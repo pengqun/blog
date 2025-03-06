@@ -1,0 +1,762 @@
+---
+title: 「或许是」史上最全的 API 网关调研
+date: '2024-03-07'
+tags: ['API', '网关', '架构']
+draft: false
+summary: 关于 API 网关的一些研究
+images: ['/static/images/api-gateway-research/introduction.png']
+---
+
+# 「或许是」史上最全的 API 网关调研
+
+对大部分业务开发同学来说，API 网关都是一个既熟悉而又陌生的存在：说它熟悉，是因为无论你是后端还是前端，日常开发时都免不了要跟它打交道；但若要深入聊聊它的价值、架构和底层原理，我想大部分同学可能还得去问 ChatGPT——也合理，毕竟集团内部早就沉淀了大量成熟的 API 网关基础设施（比如阿里云 POP、淘宝 MTOP），作为用户我们只需点开控制台，简单配置一下就能用起来。
+
+没错，我们并不需要成为 API 网关方面的专家，也能快速接入和享受它能带来的收益。这也是所有与 API 网关性质类似的基础设施，比如 Kubernetes、Service Mesh、分布式数据库等，它们一直以来追求的目标：屏蔽底层复杂性，降低使用门槛，让接入尽可能简单——最好简单到用户都完全感知不到它们的存在，润物细如声，助人似雷锋，那就最好不过了。
+
+然而，这种便利性并不意味着我们可以完全忽视它们的存在。作为开发者，我们需要对 API 网关有更深入的了解，才能更好地使用它，比如：做系统架构设计时，能合理判断是否需要 API 网关，以及如何选型；排查相关问题时，能从全链路角度定位问题原因，以及优化性能瓶颈。为此，笔者总结了这篇关于 API 网关的调研文章，希望能帮你更好地学习、理解和使用 API 网关。
+
+# 什么是 API 网关？
+
+要理解 API 网关，首先需要理解：**什么是「API」**？按照 Wikipedia 的定义，API 是计算机程序用来向操作系统、软件库或计算机上运行的任何其他服务提供者，请求服务的一组函数、过程、方法或类。按照 API 调用时物理链路，可以将 API 分为本地 API 和 远程 API；前者在单个操作系统内部就可闭环完成，后者则需要走网络调用。网关嘛，突出一个"网"字，所以显然是服务于远程 API 的，例如最常见的基于 HTTP 协议的 Web API。
+
+![](/static/images/api-gateway-research/introduction.png)
+
+*（图片来源：[What is an API | API for beginners?](https://medium.com/analytics-vidhya/what-is-an-api-api-for-beginners-4854f34153e) ）*
+
+Amazon 的创始人 Jeff Bezos，早在 2002 年就在公司内部约定了著名的 [API Mandate](https://nordicapis.com/the-bezos-api-mandate-amazons-manifesto-for-externalization/) ："**所有团队必须通过网络服务 API 暴露其数据和功能**，使得服务之间可以通过这些定义良好的接口进行通信，而不是通过内部集成。" 在接下来的二十多年里，API 逐渐成为了软件开发和集成中最重要的设计产物之一，甚至很多时候比花里胡哨的 UI 还重要。而为了让 API 的提供与消费更加规范、具备互操作性，业界也诞生了许多 API 标准，比如 RESTful API 定义的事实标准 [OpenAPI](https://swagger.io/specification/)、专用于异步 API（事件、消息）定义的 [AsyncAPI](https://www.asyncapi.com/) ，以及最近几年流行开的 [GraphQL](https://graphql.org/) 和 [gRPC](https://grpc.io/)。
+
+回到 API 网关。在微软 Azure 的架构中心文档中，对API网关是这么定义的：**API 网关位于客户端和服务之间。它充当反向代理，将请求从客户端路由到服务。它还可以执行各种横切任务，例如身份验证、SSL 终止和速率限制。**
+
+![](https://oss-ata.alibaba.com/article/2024/03/e065bcf3-2970-4e07-aab2-2b8ef5b0dae1.png)
+
+*（图片来源：[API gateways - Azure Architecture Center | Microsoft Learn](https://learn.microsoft.com/en-us/azure/architecture/microservices/design/gateway)）*
+
+在上述定义中，API 网关被作为了一种**基础设施**；这也确实符合大部分人对 API 网关的主要认知。事实上，API 网关也可以被看作是一种现代化的"架构模式"（Architecture Pattern）。例如，在《Microservice Architecture》一书中，就专门囊括了「API Gateway Pattern」：
+
+![](https://oss-ata.alibaba.com/article/2024/03/0c4b9fb0-1ae3-40b0-bee9-b79456c0a729.png)
+
+*（图片来源：[Pattern: API Gateway / Backends for Frontends](https://microservices.io/patterns/apigateway.html)）*
+
+作者将 API 网关模式定义为：**一种通过单一入口点集中处理所有客户端请求的架构模式**。它解决了微服务架构中客户端如何高效访问不同服务的问题，尤其是在面对细粒度API、不同客户端数据需求、不同网络性能要求以及后端服务动态变化的情况下。
+
+# 为什么需要 API 网关？
+
+> "计算机科学中的所有问题，都可以通过增加一个中间层来解决" — David Wheeler
+
+API 网关作为额外增加的一个中间层，可以带来如下一些好处：
+
+- **统一接入点**
+  - 安全性提升：无需暴露内部所有服务；门禁，入口处统一做安全加固、流量控制、访问控制
+  - 易于观测：流量汇聚点；可注入全链路 traceID；提高 API 调用的可见性
+  - 简化服务端配置：在网关处统一配置安全策略、部署防火墙等，维护成本更低
+  - 简化前端接入：只需与单个网关打交道（不用连接多个域名、处理不同的 CORS 和认证方式）；后端服务对前端隐藏，可以轻易变更位置，前端不感知（Location-transparency）
+- **集中 API 管理**
+  - API 全生命周期管理：设计 -> 开发 -> 测试 -> 发布 -> 管理 -> 下线
+  - 安全合规策略、数据分析、运营
+- **通用能力复用**
+  - 横向切面职责：协议转换、认证、安全、日志、统计、容错、服务发现等
+  - 统一下沉到网关，减少建设维护成本，提高业务响应速度
+- **前后端解耦**
+  - 作为「Adapter」：独立变化、兼容旧接口、易于替换、互操作性
+  - 作为「Facade」：聚合/编排 API 请求、协议转换，简化前端工作
+  - 可支持 Mock / Stub 能力：方便 API 测试
+- **形成API生态**
+  - API 服务目录：可发现、可消费、可复用；接入支持（文档 / portal）
+  - API 商业变现：账号管理、计量计费、支付管理
+
+# 功能特性
+
+- **请求路由（Request-routing）**
+  - 规则匹配：支持各种规则匹配模式，常见包括
+    - 基于"协议字段"匹配，e.g.
+      - HTTP：method/host/header/path/queryString
+      - TCP：sourceIp/destinationIp
+      - HTTPS/TLS：SNI
+      - gRPC：host/header/path
+    - 基于"会话绑定"：Session Affinity / Sticky Session
+    - 其它：条件表达式、TTL、优先级
+  - 流量调度：灰度（金丝雀）、蓝绿；A/B Test
+  - 流量镜像（Traffic Mirroring）
+- **负载均衡（Load Balancing）**
+  - 基于注册中心 - 服务地址来源包括：
+    - 手工维护：add / remove接口、IP 地址列表配置）
+    - 基于服务发现，自动维护地址列表
+  - 基于 DNS
+    - 后端服务的host使用域名来配置时，且该域名会解析到多个ip地址，则会自动使用DNS负载均衡
+    - DNS记录的TTL值大小决定了刷新速度；越小更新越及时，但性能影响越大
+  - LB 算法支持
+    - 标准算法：包括 Weighted Round-Robin， hash
+    - 自定义算法
+- **健康检查（Health Check）**
+  - 主动检查：通过注册健康检查endpoint，定期检查
+  - 被动检查：基于普通请求的响应情况，判断target的健康状况
+  - 自动过滤不健康节点
+- **服务发现（Service Discovery）**
+  - DNS、K8s Service
+  - Nacos、Consul、Eureka、ZK、etcd
+- **协议支持（Network Protocols）**
+  - HTTP(s) 1.1, HTTP/2, HTTP/3（QUIC）
+  - RPC：Dubbo、gRPC（包括 [gRPC-web](https://github.com/grpc/grpc-web)）
+  - TCP / UDP：4层通用代理
+  - TLS：可以卸载证书，也可以不卸载（passthrough模式，基于SNI来匹配路由）
+  - WebSocket
+  - Proxy Protocol
+  - MQ：MQTT、RocketMQ、Kafka
+- **协议转换（Protocol Converter）**
+  - TLS Termination：相反方向也有（但不常见），e.g. HTTP -> HTTPs
+  - HTTP to dubbo / gRPC
+  - HTTP to Kafka
+- **规范支持（API Specifications）**
+  - OAS / Swagger （REST风格）
+  - GraphQL
+  - AsyncAPI
+- **认证鉴权（Authn & Authz）**
+  - BASIC、JWT、HMAC签名；包括调用上游接口的认证鉴权
+  - SSO / 三方认证相关：OAuth 2.0, OIDC, SAML, LDAP
+  - mTLS；证书管理
+  - 动态拦截规则：e.g. 基于参数表达式
+- **安全防护（Security）**
+  - 限流：QPS / 并发；参数 / API / App 级别
+  - 黑白名单：一般基于 IP（包括 CIDR 段）
+  - 请求防重放、防篡改、跨域策略（CORS）配置
+  - 攻击检测与防护：DDoS防护、CSRF防护
+- **容错/韧性（Resilience）**
+  - 超时：连接超时 / 写超时 / 读超时
+  - 重试：重试策略配置：
+    - 触发条件，e.g. non-200、GET请求、超时报错
+    - 重试次数
+    - 重试间隔
+  - 熔断/降级：
+    - 降级策略：直接报错 / fallback路由
+- **请求校验（Request Verification）**
+  - 校验类型；是否必填；数值范围
+  - 描述方式：可视化配置；JSON Schema
+- **请求转换（Request Transformation）**
+  - 路径重写（Path Rewrite）
+  - 参数映射：e.g. HTTP method/host/uri/header/body
+- **响应生成（Response Generation）**
+  - 响应 Mock：固定内容；动态规则
+  - 响应缓存：缓存策略配置 -
+    - method：一般是GET
+    - code：e.g. 200
+    - TTL
+  - 静态响应：直接返回本地文件资源，e.g. HTML、JS/CSS、图片
+- **响应转换（Response Transformation）**
+  - 压缩（如GZip）
+  - 参数映射：e.g. HTTP header/body/status code；业务错误码
+- **扩展能力（Extensions）**
+  - 插件机制
+  - 扩展点：上下游协议、LB算法、路由规则、请求处理、响应处理
+    - 场景：认证鉴权、安全过滤、可观测性、协议支持
+    - 内置功能也尽量用插件实现
+  - 动态插件：支持运行时动态加载和执行插件
+  - 多语言：Java、Go、Lua、Wasm
+  - 插件编排："低代码 API 网关"
+- **可观测性（Observability）**
+  - 日志：SLS；访问日志、错误日志
+  - 监控报警：指标：RPS/RT/错误率；仪表盘；Prometheus / Skywalking
+  - 分布式追踪：入口处注入全链路 TraceID
+  - APM：性能
+- **数据分析（Analytics）**
+  - API调用量
+  - 统计报表：RT、错误率
+- **API 管理（API Manangement）**
+  - 管理方式：配置文件；API；GUI界面；
+  - 热更新能力：配置、插件更新；对长连接更友好，不会引起连接中断
+  - API 设计：定义、分组、模型管理（JSON Schema / Swagger Model），生成SDK时也会用到
+  - API 编排：如 BFF 场景
+  - API 发布：上线、下线；回滚；灰度；环境管理（包括环境变量）；版本管理；证书管理（证书轮转、透明更新、通配符证书支持）
+  - API 测试：调试、mock
+  - SDK 生成：多语言
+  - API 文档
+- **集成能力（Integrations）**
+  - K8s 集成：支持以 K8s 原生（基于 CR 声明式配置、云信息存储在 etcd）的方式来管理网关
+    - K8s Ingress Controller
+    - K8s Gateway API（Ingress V2）
+  - Istio 集成
+    - Istio Gateway
+  - 认证和鉴权集成
+    - e.g. 开源 Keycloak 集成；商业 IAM 集成（如 Okta）
+- **部署选项（Deployment Options）**
+  - Embedded
+  - Docker
+  - Helm
+  - Operator
+- **API 生态（API EcoSystems）**
+  - 开发者门户
+  - API 目录
+
+# 开源项目
+
+## Java 原生网关
+
+### Zuul
+
+项目地址：[https://github.com/Netflix/zuul](https://github.com/Netflix/zuul)
+
+![](https://oss-ata.alibaba.com/article/2024/03/75a86a40-15df-439c-b4c9-4fe2d102e3c8.png)
+
+- **简介**
+  - Netflix 开源的 API 网关
+- **功能**
+  - 协议支持（注：一个实例只支持同时配置一种协议；根据"SERVER_TYPE"配置）
+    - HTTP/1：假定前置的SLB已卸载TLS
+    - HTTP/2 (requires TLS)：前置SLB使用TCP（可能不支持HTTP/2）；需要配置SSL证书和开启代理协议（考虑到XFF头）
+    - HTTP - Mutual TLS：同上 + 还需要配置一个 trust **store**，用于存储客户端证书
+    - WebSocket / SSE
+    - gRPC
+  - 服务发现
+    - [Eureka](https://github.com/Netflix/eureka) / 静态服务器列表 / 其他服务发现机制
+    - Eureka与Ribbon客户端天然集成
+  - 负载均衡
+    - 基于Ribbon提供的 ZoneAwareLoadBalancer （对AZ感知）
+  - 消息推送
+    - 支持两种协议：WebSockets、Server Sent Events (SSE)
+    - 连接认证：每个入连接都必须认证；实现 PushAuthHandler
+    - 客户端端注册和查找：默认基于内存；如果集群部署，支持第二级的全局存储，e.g. Redis, Cassandra, Amazon DynamoDB
+    - 解决连接被LB关闭问题：最新版的7层代理 or 4层TCP代理；增加LB的IDLE超时
+  - 其他特性
+    - 状态码类别：比HTTP状态码更细
+    - 请求通行证：请求经历的各个时间节点
+    - 请求尝试：记录发出的各个请求
+    - 静态请求响应：直接在边缘返回，无需转发到内部集群
+    - 多区域韧性（Multiregion Resiliency）
+    - 压力测试支持
+- **架构**
+  - 2.0 版本（基于 Netty）：[https://github.com/Netflix/zuul/wiki/How-It-Works-2.0](https://github.com/Netflix/zuul/wiki/How-It-Works-2.0)
+    ![](https://oss-ata.alibaba.com/article/2024/03/5fb30360-3a20-400f-bee3-504bf0b2ff10.png)
+    - pre-filters (inbound filters)：认证、路由、装饰请求等
+    - endpoint-filter：返回静态请求 or 默认的 ProxyEndpoint
+    - post-filters (outbound filters)：metrics、装饰响应等
+  - 1.0 版本（基于 Servlet）
+    ![](https://oss-ata.alibaba.com/article/2024/03/7528e1df-a036-4405-b64d-dee402499d48.png)
+- **参考**
+  - [How We Use Zuul At Netflix
+](https://github.com/Netflix/zuul/wiki/How-We-Use-Zuul-At-Netflix)
+  - [Announcing Zuul: Edge Service in the Cloud](https://netflixtechblog.com/announcing-zuul-edge-service-in-the-cloud-ab3af5be08ee)
+  - [Scaling Push Messaging for Millions of Devices @Netflix](https://qconnewyork.com/system/files/presentation-slides/final_qcon_ny_-_zuul_push_presentation.pdf)
+  - [Netflix OSS and Spring Boot — Coming Full Circle](https://netflixtechblog.com/netflix-oss-and-spring-boot-coming-full-circle-4855947713a0)
+  - [Open Sourcing Zuul 2](https://netflixtechblog.com/open-sourcing-zuul-2-82ea476cb2b3)
+  - [Zuul 2 : The Netflix Journey to Asynchronous, Non-Blocking Systems](https://netflixtechblog.com/zuul-2-the-netflix-journey-to-asynchronous-non-blocking-systems-45947377fb5c)
+
+### Spring Cloud Gateway
+
+项目地址：[https://github.com/spring-cloud/spring-cloud-gateway](https://github.com/spring-cloud/spring-cloud-gateway)
+
+- **简介**
+  - 作为 Spring Cloud 生态系统中的网关，目标是替代 Zuul
+  - 比 Zuul 2 更早使用 Netty 实现异步 IO
+- **概念**
+  - Route（路由）：由ID、目标URI、一组谓词和过滤器组成；当谓词为真时，路由被匹配
+  - Predicate（谓词）：Java 8 Function Predicate；基于HTTP请求的任意内容匹配
+  - Filter（过滤器）：可以修改请求和响应
+- **功能**
+  - Route Predicate Factories：路由规则配置（[参考文章](https://www.cnblogs.com/duanxz/p/14765996.html)）
+    ![](https://oss-ata.alibaba.com/article/2024/03/0cf3da30-a81e-47d2-ab47-db96b7d018be.png)
+  - **Route Filter**（[35+ filters）](https://docs.spring.io/spring-cloud-gateway/docs/4.0.0-SNAPSHOT/reference/html/#gatewayfilter-factories)：对某个路由下的请求/响应进行修改
+    - 熔断 - CircuitBreaker：基于 Resilience4J
+    - 限速 - RequestRateLimiter：基于 KeyResolver 实现可插拔的策略；支持Redis实现
+    - 重试 - Retry：默认针对GET/5xx/IO异常/超时异常，重试3次 & 不指数回退
+    - 重写路径 - RewritePath：支持正则表达式替换
+    - 添加头部 - SecureHeaders：添加一些推荐的安全头部
+    - 修改请求/响应体 - ModifyRequestBody / ModifyResponseBody：只能用Java DSL来配置
+    - 修改响应体中的字段 - RemoveJsonAttributesResponseBody
+    - OAuth传递 - Token Relay：转发 OAuth2 token 到下游服务
+    - 请求体缓存 - CacheRequestBody：用于需要读取多次body的场景
+    - GRPC协议转换 - JSONToGRPCFilter：需要输入 proto文件、service/method名
+  - **Global Filter**：按条件应用到全部的路由
+    - 外部路由 - NettyRouting / NettyWriteRespone：实际转发请求和返回响应的filter
+    - 内部路由 - ForwardRoutingFilter：根据URI模式，转发给 DispatcherHandler
+    - 负载均衡 - ReactiveLoadBalancerClientFilter：基于 [ReactorLoadBalancer](https://docs.spring.io/spring-cloud-commons/docs/current/reference/html/#spring-cloud-loadbalancer) 进行负载均衡
+    - WebSocket路由 - WebsocketRoutingFilterr：基于 Spring Websocket 转发 webscoket 请求
+    - Metrics监控 - Gateway Metrics：基于 Spring Actuator；可与 prometheus/grafana 集成
+  - **HttpHeaders Filter**：在 NettyRoutingFilter 转发请求之前应用生效
+    - HTTP头部处理：Forwarded、RemoveHopByHop、XForwarded
+  - **配置**：基于 RouteDefinitionLocator；默认从Spring配置文件加载，可改为基于DB等外部数据源加载
+    - Route Metadata：为路由增加额外参数；可在 exchange 对象中获取到
+    - HTTP超时配置：全局、按路由
+    - 基于 Spring Cloud DiscoveryClient 自动创建路由：默认规则、自定义
+    - 多实例共享路由：基于 RedisRouteDefinitionRepository
+  - **管控**：基于Actuator
+    - 能力：路由缓存刷新；路由创建和删除
+- **架构**
+  ![](https://oss-ata.alibaba.com/article/2024/03/ef35c1f3-5d01-4a3d-9561-cad4e3508dd3.png)
+  - 基于 [Spring Boot 2.x](https://spring.io/projects/spring-boot#learn), [Spring WebFlux](https://docs.spring.io/spring/docs/current/spring-framework-reference/web-reactive.html) 和 [Project Reactor](https://projectreactor.io/docs)
+    - WebFlux 框架底层使用了高性能的 Reactor 模式通信框架 **Netty**
+  - 过滤器："**pre**" filter logic + "**post**" filter logic
+- **参考**
+  - 官网：[https://spring.io/projects/spring-cloud-gateway](https://spring.io/projects/spring-cloud-gateway)
+  - 教程：[https://spring.io/guides/gs/gateway/](https://spring.io/guides/gs/gateway/)
+  - 文档：[https://docs.spring.io/spring-cloud-gateway/docs/current/reference/html/](https://docs.spring.io/spring-cloud-gateway/docs/current/reference/html/)
+
+### ShenYu
+
+项目地址：[https://github.com/apache/shenyu](https://github.com/apache/shenyu)
+
+![](https://oss-ata.alibaba.com/article/2024/03/474d9f44-ecf2-489e-8a29-9fa60d1f2c21.png)
+
+- **简介**
+  - 一个异步的，高性能的，跨语言的，响应式的 API 网关；国产的 Apache 基金会项目
+- **功能**
+  - 前端协议：WebSocket、MQTT
+  - 后端协议：Dubbo、gRPC、TARS、SOFA
+  - API治理：Hystrix、RateLimiter插件（Lua Token Bucket 算法）、Sentinel
+  - 仪表板：动态流量控制，用户菜单权限的可视化后端
+  - 扩展：插件热插拔，动态加载
+  - 服务注册：提供.NET，Python，Go，Java客户端用于API注册
+
+## Go 原生网关
+
+### Traefik
+
+项目地址：[https://github.com/traefik/traefik](https://github.com/traefik/traefik)
+
+![](https://oss-ata.alibaba.com/article/2024/03/bf3adb5b-a987-4ccf-943a-bfbcb6e6a39f.png)
+
+- **简介**
+  - 一个现代 HTTP 反向代理和负载均衡器，可以轻松部署微服务
+  - GitHub Stars：47 K
+
+### Tyk
+
+项目地址：[https://github.com/TykTechnologies/tyk](https://github.com/TykTechnologies/tyk)
+
+![](https://oss-ata.alibaba.com/article/2024/03/5f380693-6c8b-4c66-bd0f-618f5d9ac701.png)
+
+**简介**
+
+- 一个云原生 API 网关，支持 REST, GraphQL, TCP 和 gRPC 协议
+- 自称为全球[性能最快的网关](https://tyk.io/performance-benchmarks/)
+
+### **Lura**
+
+项目地址：[https://github.com/luraproject/lura](https://github.com/luraproject/lura)
+
+![](https://oss-ata.alibaba.com/article/2024/03/5d6f79d2-b298-469e-964a-35adcdc95df5.png)
+
+- **简介**
+  - 支持中间件的超高性能 API 网关； Linux 基金会托管的项目
+  - 前身为 KrakenD framework，是 [KrakenD](https://github.com/krakend) API 网关的核心服务
+
+### **Easegress**
+
+项目地址：[https://github.com/easegress-io/easegress](https://github.com/easegress-io/easegress)
+
+![](https://oss-ata.alibaba.com/article/2024/03/22f9998a-b9d0-4914-9603-6110ffd8cf9d.png)
+
+- **简介**
+  - 一个云原生流量编排系统
+  - 不仅仅只是一个 7 层的 API Gateway，也可以是一个 Service Mesh 的 Sidecar
+
+## Nginx 衍生网关
+
+### Kong
+
+项目地址：[https://github.com/kong/kong](https://github.com/kong/kong)
+
+![](https://oss-ata.alibaba.com/article/2024/03/46bae079-3632-415a-bece-ab360ba069f6.png)
+
+- **简介**
+  - 云原生、平台无关、可扩展的 API 网关，具备高性能和插件可扩展性
+  - 「据说是」生产环境使用最广泛的 API 网关
+  - 背后有一个商业公司（成立于 2009 年，2015年开源），提供托管版网关和相关服务
+- **概念**
+    - **Services**：表示一个外部的上游API或微服务；需指定URL
+        - 多个Route可指向同一个Service，并挂载不同Policy（e.g. 区分内外访问限速）
+    - **Routes**：确定一个请求如何（或是否）发送到对应的Services；支持重写URL
+    - **Upstreams**：表示一个虚拟的主机名，可用于健康检查、断路器、多服务负载均衡
+        - Service可以指向一个Upstream（而不是写死host）
+    - **Plugins**：提供高级功能 + 扩展网关能力；
+    - **Consumer**：向Kong发起请求的实体；代表一个用户或外部服务
+    - **Creadential**：consumer关联的API key
+- **插件**
+  - 分类：开源插件 vs. Plus版插件 vs. 企业版插件
+  - 插件中心：[https://docs.konghq.com/hub/](https://docs.konghq.com/hub/)
+  - 插件工程模板：[https://github.com/Kong/kong-plugin](https://github.com/Kong/kong-plugin)
+  - 插件开发文档：[https://docs.konghq.com/gateway/latest/plugin-development/](https://docs.konghq.com/gateway/latest/plugin-development/)
+  - Lua 插件
+    - 一组 Lua 函数，用于插件和 core（或其它模块，如缓存、DB）之间的交互
+    - handler.lua：包含一堆要实现的接口，在请求/连接对应生命周期被调用
+    - schema.lua：插件配置定义，包括校验规则
+    - api.lua：描述插件透出的自定义实体操作 API endpoint，用于 Admin API 交互
+    - daos.lua：存储在 data store 中的自定义实体
+  - 其它语言插件
+    - Go 插件 SDK：https://github.com/Kong/go-pdk
+    - Python 插件 SDK：https://github.com/Kong/kong-python-pdk
+    - JS 插件 SDK：https://github.com/Kong/kong-js-pdk
+- **架构**
+  - 基于 OpenResty（a Lua application running in NGINX）
+    ![](https://oss-ata.alibaba.com/article/2024/03/0897c768-95d1-4725-8ba7-f55e93774e64.png)
+  - 元数据存储：PostgreSQL / Cassandra（已废弃）
+  - 集群架构：Gossip 协议；依赖前置LB做负载均衡
+  - 支持混合（DP / CP 分离）模式部署
+- **参考**
+  - 文档：[https://docs.konghq.com/gateway/latest/](https://docs.konghq.com/gateway/latest/)
+  - 学院：[https://education.konghq.com/](https://education.konghq.com/)
+  - 性能调优配置：[https://docs.konghq.com/gateway/3.0.x/production/sizing-guidelines/](https://docs.konghq.com/gateway/3.0.x/production/sizing-guidelines/)
+  - [Question: Why OpenResty as a base instead of Envoy](https://github.com/Kong/kong/issues/6658)
+
+### APISIX
+
+项目地址：[https://github.com/apache/apisix](https://github.com/apache/apisix)
+
+![](https://oss-ata.alibaba.com/article/2024/03/82631161-99c9-429d-a915-ce95654f7e15.png)
+
+- **简介**
+  - 一个动态、实时、高性能的 API 网关；国产的 Apache 基金会项目
+  - Inspired by **Kong** and **[Orange](https://github.com/orlabs/orange)**
+- **概念**
+  - Route：通过路由定义规则来匹配客户端请求，根据匹配结果加载并执行相应的插件，最后把请求转发给到指定的上游应用
+  - Upstream：上游的作用是按照配置规则对服务节点进行负载均衡，它的地址信息可以直接配置到路由或服务上
+  - Admin API：用户可以通过 Admin API 控制 APISIX 实例
+- **功能**
+  - 多租户（多个工作分区）
+  - 多环境：多个etcd集群，彼此数据隔离
+  - API管理：版本管理、API分组、API发布、在线调试；兼容OAS 3.0
+  - 多API聚合、自定义4层/7层协议、错误注入、API管理、插件编排：只有API7支持
+  - HTTP/3、HTTP → gRPC/Dubbo：只有API7和Kong支持
+  - 60+ 内置插件：认证鉴权、安全、可观测性、流量管理、多协议接入等
+  - 插件市场：[https://apisix.apache.org/plugins/](https://apisix.apache.org/plugins/)
+  - Ingress 支持：[https://github.com/apache/apisix-ingress-controller](https://github.com/apache/apisix-ingress-controller)
+- **架构**
+  - 文档：[https://apisix.apache.org/zh/docs/apisix/architecture-design/apisix/](https://apisix.apache.org/zh/docs/apisix/architecture-design/apisix/)
+    ![](https://oss-ata.alibaba.com/article/2024/03/f52dc089-d84e-4918-9cf1-0382e751e5d0.png)
+  - 数据面：Lua + Nginx
+  - 控制面：管理 API + etcd
+    - 配置中心：默认是etcd，也支持consul、nacos、eureka等
+  - Plugin Runtime
+    - 原生 Lua 插件的运行框架
+    - 多语言插件运行时（Plugin Runner）：Java、Python、Go
+    - Wasm 插件运行时
+  - Java Plugin Runner
+    - 项目地址：[https://github.com/apache/apisix-java-plugin-runner](https://github.com/apache/apisix-java-plugin-runner)
+    - demo：[https://github.com/tzssangglass/java-plugin-runner-demo-1](https://github.com/tzssangglass/java-plugin-runner-demo-1)
+    - 文档：[https://apisix.apache.org/docs/java-plugin-runner/development/](https://apisix.apache.org/docs/java-plugin-runner/development/)
+- **参考**
+  - [为什么 Apache APISIX 选择 NGINX+Lua 技术栈？](https://apisix.apache.org/zh/blog/2021/08/25/why-apache-apisix-chose-nginx-and-lua/)
+  - [基于Apache APISIX的全链路灰度方案设计与实践](https://ata.alibaba-inc.com/articles/236204?spm=ata.23639746.0.0.6bee7760twT3FV)
+  - [什么是 API 网关？- APISIX](https://zhuanlan.zhihu.com/p/561360991)
+  - [为什么说 Apache APISIX 是最好的 API 网关？](https://zhuanlan.zhihu.com/p/565924529)
+
+### 3scale
+
+项目地址：[https://github.com/3scale/apicast](https://github.com/3scale/apicast)
+
+- **简介**
+  - 改名为了 APIcast，是 [Red Hat 3scale API Management Platform](https://www.redhat.com/en/technologies/jboss-middleware/3scale) 的一部分
+
+## **Envoy 衍生网关**
+
+### Gloo
+
+![](https://oss-ata.alibaba.com/article/2024/03/bff3d70b-cf29-4445-96eb-5ca959aec237.png)
+
+项目地址：[https://github.com/solo-io/gloo](https://github.com/solo-io/gloo)
+
+- **简介**
+  - Kubernetes 原生的 Ingress Controller 和 API 网关，基于 Kubernetes Gateway API
+  - 擅长功能级路由，支持遗留应用程序、微服务和 Serverless，提供强大的发现功能
+- **架构**
+  - 文档：[https://docs.solo.io/gloo-gateway/latest/concepts/about/architecture/](https://docs.solo.io/gloo-gateway/latest/concepts/about/architecture/)
+    ![](https://oss-ata.alibaba.com/article/2024/03/dffd95bf-1624-4e86-b163-5abc60bc91b8.png)
+
+### Higress
+
+项目地址：[https://github.com/alibaba/higress](https://github.com/alibaba/higress)
+
+![](https://oss-ata.alibaba.com/article/2024/03/421bafd7-6d92-47f9-8f9e-a76617d30520.png)
+
+- **简介**
+  - 基于阿里内部两年多的 Envoy Gateway 实践沉淀，以开源 Istio 与 Envoy 为核心构建的下一代云原生网关。
+  - 实现了安全防护网关、流量网关、微服务网关三层网关合一，可以显著降低网关的部署和运维成本。
+- **vs. Nginx**
+  - gRPC 支持更完善
+  - Reload 访问无损
+    - Nginx：reload 会引起长连接抖动，导致流量短暂中断
+    - Envoy：通过 xDS 支持配置热更新；秒级生效、业务无感知
+  - 性能可接受：比 Nginx 差，但在同一个量级上
+  - 统一技术栈：与 Service Mesh 整合，同时调度 南北向外部流量 和 东西向内部流量
+- **功能**
+  - 扩展能力
+    - 多语言插件：WASM / Lua / 进程外 （跟 Envoy 一致？）
+    - 自带插件：WAF防护、多K8s集群、多注册中心、灰度
+    - 生效粒度：全局级、域名级，路由级
+  - 生态集成
+    - Nacos / ZooKeeper / Consul 服务发现
+    - Sentinel 限流
+    - Skywalking / Prometheus 监控
+    - OpenTelemetry 追踪
+    - 支持 [OpenKruise](https://github.com/openkruise/kruise)（阿里开源的K8s扩展组件） 灰度发布
+- **参考**
+  - 阿里巴巴开源下一代云原生网关 Higress：基于 Envoy，支持 Nginx Ingress 零成本快速迁移：[https://www.infoq.cn/article/eDP9ttYCRgbWETL6dT75](https://www.infoq.cn/article/eDP9ttYCRgbWETL6dT75)
+  - Istio Ingress Gateway集团大规模生产实践：[https://ata.alibaba-inc.com/articles/202150](https://ata.alibaba-inc.com/articles/202150)
+  - 2020年双十一微服务网关（蚂蚁互通网关）圆满完成首次大考：[https://ata.alibaba-inc.com/articles/186337](https://ata.alibaba-inc.com/articles/186337)
+  - Higress 开源后，我们整理了开发者最关心的 15 个问题：[https://mp.weixin.qq.com/s/9Hw4-uYN0qIxI7hQwHySmw](https://mp.weixin.qq.com/s/9Hw4-uYN0qIxI7hQwHySmw)
+
+### Contour
+
+项目地址：[https://github.com/projectcontour/contour](https://github.com/projectcontour/contour)
+
+![](https://oss-ata.alibaba.com/article/2024/03/b3c5074e-2054-4a9b-9986-2e944fe0eb43.png)
+
+- **简介**
+  - 一个 Kubernetes Ingress，为 Envoy 边缘和服务代理提供控制平面
+
+### Emissary
+
+项目地址：[https://github.com/emissary-ingress/emissary](https://github.com/emissary-ingress/emissary)
+
+- **简介**
+  - 基于 Envoy Proxy 构建的开源 Kubernetes 原生 API 网关 + 第 7 层负载均衡器 + Kubernetes Ingress；CNCF 孵化项目
+  - 最早的名字是 Ambassador API Gateway
+
+## 选型对比
+
+- Comparison of Kubernetes Ingress controllers：[对比表格](https://docs.google.com/spreadsheets/d/191WWNpjJ2za6-nbG4ZoUMXMpUK8KlCIosvQB0f-oq3k/edit#gid=907731238)
+
+![](https://oss-ata.alibaba.com/article/2024/03/c687d4fb-7519-41b0-b331-f25489937af1.png)
+
+- Comparing Ingress controllers for Kubernetes：[博客文章](https://blog.palark.com/comparing-ingress-controllers-for-kubernetes/)、[对比表格](https://docs.google.com/spreadsheets/d/1DnsHtdHbxjvHmxvlu7VhzWcWgLAn_Mc5L1WlhLDA__k/edit?spm=ata.21736010.0.0.5dc65ee3bsHDBK#gid=0)
+
+![](https://oss-ata.alibaba.com/article/2024/03/514309e6-6e6c-462b-940f-26f2f9cacead.png)
+
+- 个人之前也总结和维护了一个 Excel 文档：[https://aliyuque.antfin.com/emas_doc/rd/mww08w](https://aliyuque.antfin.com/emas_doc/rd/mww08w)
+
+![](https://oss-ata.alibaba.com/article/2024/03/8eb333eb-8909-4dba-b79a-1270b793af97.png)
+
+- 其它一些包含选型对比（有些还做了性能 benchmark）的文章
+  - [如何选择微服务 API 网关：对比 Kong、APISIX、Tyk、Apigee 和其他网关](https://zhuanlan.zhihu.com/p/81306020)
+  - [如何评价 spring cloud gateway? 对比 zuul2.0 主要的优势是什么?](https://www.zhihu.com/question/280850489)
+  - [How we migrated Dropbox from Nginx to Envoy](https://dropbox.tech/infrastructure/how-we-migrated-dropbox-from-nginx-to-envoy)
+  - [Why pick Envoy Proxy and Solo.io over Kong Gateway for modernization](https://www.solo.io/blog/envoy-solo-over-kong-gateway-for-modernization/)
+  - [NGINX With Eureka Instead of Spring Cloud Gateway or Zuul](https://dzone.com/articles/nginx-with-eureka-instead-of-spring-cloud-gateway)
+  - [Comparing API Gateway Performances: NGINX vs. ZUUL vs. Spring Cloud Gateway vs. Linkerd](https://engineering.opsgenie.com/comparing-api-gateway-performances-nginx-vs-zuul-vs-spring-cloud-gateway-vs-linkerd-b2cc59c65369)
+  - [Netflix Zuul vs Nginx performance](http://instea.sk/2015/04/netflix-zuul-vs-nginx-performance/)
+  - [API Gateways Are Going Through an Identity Crisis](https://blog.christianposta.com/microservices/api-gateways-are-going-through-an-identity-crisis/)
+  - [Spring Cloud Gateway or Zuul2, Which one is the right replacement for Zuul1](https://stackoverflow.com/questions/56529083/spring-cloud-gateway-or-zuul2-which-one-is-the-right-replacement-for-zuul1)
+
+# 商业产品
+
+## 相关资源
+
+- [Gartner Magic Quadrant for Full Life Cycle API Management 2022](https://www.gartner.com/en/documents/4021131)
+![](https://oss-ata.alibaba.com/article/2024/03/7f6c03ed-6e90-4714-bb53-52e000848ddf.png)
+
+- [The Forrester Wave™: API Management Solutions, Q3 2022](https://www.forrester.com/report/the-forrester-wave-tm-api-management-solutions-q3-2022/RES176383)
+![](https://oss-ata.alibaba.com/article/2024/03/2ac426d3-9203-48bb-b924-65cf7c090c21.png)
+
+- [API Management Reviews 2024 | Gartner Peer Insights](https://www.gartner.com/reviews/market/api-management)
+
+## AWS API Gateway
+
+官网：https://aws.amazon.com/api-gateway/
+
+![](https://oss-ata.alibaba.com/article/2024/03/8c97d85d-3d55-4a2c-aedc-f9ce08990ef6.png)
+
+- **简介**
+  - AWS 提供的一项云服务，用于创建、发布、维护、监控和保护各种规模 API
+- **特性**
+  - 协议支持：RESTful、WebSocket
+  - 生态集成：与 AWS Lambda 和 容器服务 深度集成
+- **参考**
+  - 文档：https://docs.aws.amazon.com/apigateway/latest/developerguide/welcome.html
+
+## Google Apigee
+
+官网：https://cloud.google.com/apigee
+
+![](https://oss-ata.alibaba.com/article/2024/03/848437c5-07f1-46b9-bf52-5d8e4d69ae2e.png)
+
+- **简介**
+  - Google Cloud 上的原生 API 管理工具，用于构建、管理和保护 API
+  - 2004 年成立，被 Google 在 2016 年收购
+- **特性**
+  - [Apigee hybrid](https://cloud.google.com/apigee/docs/hybrid/v1.11/what-is-hybrid)：支持用户自己托管运行时，Apigess托管控制面（在GCP上）
+  - [Apigee X](https://cloud.google.com/blog/products/api-management/apigee-x-google-clouds-more-powerful-api-management-platform)：基于 GCP 的 SaaS 部署，将 Apigee 与 Cloud Armor 和 reCAPTCHA 等其他 GCP 产品相结合
+- **参考**
+  - 文档：https://cloud.google.com/apigee/docs/getstarted
+  - 架构：https://cloud.google.com/apigee/docs/api-platform/architecture/overview
+
+除了 Apigee，Google Cloud 自身也有一些网关产品：
+- [Google Cloud Endpoints](https://cloud.google.com/endpoints)：基于 Nginx；中低端（low-end）网关；主打 gRPC 支持
+- [Google Cloud API Gateway](https://cloud.google.com/api-gateway)：基于 Envoy；与 Serverless 后端（Cloud Functions、Cloud Run 和 App Engine）天然集成
+
+## Azure API Management
+
+官网：https://azure.microsoft.com/en-us/products/api-management
+
+![](https://oss-ata.alibaba.com/article/2024/03/3b99ca9e-b309-406c-b515-1064206936b5.png)
+
+- **简介**
+  - 微软 Azure 上的一个混合多云 API 管理平台，适用于所有环境中的 API；支持完整的 API 生命周期。
+  - 由 API 网关、管理平面和开发者门户组成
+  - 属于 Azure Integration Services 的一部分
+- **特性**
+  - 混合多云部署：可与 Azure、其他云和本地托管的 API 并行部署
+- **参考**
+  - 文档：https://learn.microsoft.com/en-us/azure/api-management/api-management-key-concepts
+
+## MuleSoft Anypoint Platform
+
+官网：https://www.mulesoft.com/platform/anypoint-platform-features
+
+![](https://oss-ata.alibaba.com/article/2024/03/e32c8e6a-fa56-4dc4-a6ac-665f202818f3.png)
+
+- **简介**
+  - MuleSoft 是 iPaaS 领域的 Leader 之一（已被 SalesForce 于 2018 年收购），其 Anypoint Platform 由一系列子产品组成，共同提供了 API 管理 + 企业集成能力
+- **特性**
+  - 支持 多种 API 规范：RAML, OAS, AsyncAPI, GraphQL
+  - **Anypoint Mule Gateway**：在 Mule Runtime 引擎中包含的嵌入式 API 网关
+  - **Anypoint Flex Gateway**：可独立部署的、基于 Envoy 的轻量级 API 网关
+  - Anypoint API Manager：API 安全策略、访问控制；将多个API组合为产品
+  - Anypoint API Designer：支持可视化或代码编辑；设计、文档、测试、mock
+  - Anypoint API Governance：API 治理 - 确保标准质量和安全合规，减少评审开销
+  - Anypoint API Community Manager：基于自带的主题，快速构建门户；个性化API消费需求；自动填充交互式的文档
+  - Anypoint Catalog CLI：发现、归类 API，包括关联的元数据和文档
+  - Anypoint DataGraph：基于 GraphQL API；统一 schema 管理
+  - Anypoint Exchange：API 和集成资产分享
+- **参考**
+  - Anypoint Platform Gateways Overview：https://docs.mulesoft.com/gateway-home/
+  - Mule Community Edition（社区开源版）：https://github.com/mulesoft/mule
+
+## Kong 商业版
+
+官网：https://konghq.com/
+
+![](https://oss-ata.alibaba.com/article/2024/03/0cdbd2f3-3e9c-41d4-af1f-d564eebc5087.png)
+
+- **简介**
+  - 成立于 2009 年，2015年开源了核心的 Gateway 组件（见上文介绍）
+- **版本**
+  - 开源版本、免费版本（+ Manager）、Plus版本（+ 额外插件）、Enterprise版本（+ Dev Portal、Vitals、RBAC、企业插件）
+- **特性**
+  - **Kong Gateway**
+    - Kong Admin API：REST风格管理接口；单端的端口暴露（默认8001）
+    - Kong Manager：GUI界面；底层基于 Admin API；dashboard支持
+![](https://oss-ata.alibaba.com/article/2024/03/efc30209-992d-4762-b5aa-677d27f7624d.png)
+    - Kong Vitals：提供节点的健康状态、性能监控、API 使用情况的 metrics
+  - **Kong AI Gateway**：Multi-LLM AI Gateway to run, secure, and govern AI traffic
+![](https://oss-ata.alibaba.com/article/2024/03/ed73fb84-4b7e-45f7-83d7-7762d5dab7dc.png)
+  - **Konnect**：API全生命周期管理平台
+![](https://oss-ata.alibaba.com/article/2024/03/b689a791-2e40-43ef-9418-7cdfd073b3ea.png)
+    - 管控平面由 Kong 在云端提供，运行时引擎/数据平面（Gateway）由用户在自己的环境里管理
+    - Service Hub：让内部API 可发现、可消费、可复用；服务目录/仓库，加速开发
+      - 管理员可以将服务从 Service Hub 直接发布到 Dev Portal，让开发者可以去搜索、发现和消费
+    - Runtime Manager：管理运行时和服务；可以创建多个控制面（基于 Runtime Group），彼此配置隔离；插件安装
+    - Dev Portal：可定制的开发者门户；让开发者浏览API、查看API文档、测试API、管理他们自己的API访问凭证；可以减轻API创建者的负担，让API使用者自助管理凭证
+    - Analytics：健康状态/性能监控；服务、路由、应用
+  - Kong Plugin Hub：通过 Manager 或 Admin API 来开启
+![](https://oss-ata.alibaba.com/article/2024/03/8c6639f2-6922-4bbf-ba03-ee30b05e5607.png)
+  - Kong Ingress Controller：配套 helm chart + operator
+  - Insomnia：基于 spec 的 REST / GraphQL 服务开发；类似Postman；自动化测试、Git 同步
+  - decK：声明式配置支持；YAML格式
+- **部署选项**
+    - 混合部署：控制面（CP）/ 数据面（DP） 分离，降低攻击面
+![](https://oss-ata.alibaba.com/article/2024/03/0b6b52bd-ffd4-43f6-8307-93ed8b93927f.png)
+        - 运行的bin程序都一样，通过 KONG_ROLE 切换角色
+        - 数据面（网关实例） vs. 管控面（Runtime Manager）
+          - 数据面可以部署在任意环境，包括公共云/本地机房、K8s/VM
+          - 连接方式：数据面主动向管控面发起建连请求；双向TLS握手；长连接+心跳+自动重连
+          - 传输数据：配置、遥测数据（统计/计费）
+          - 故障隔离：管控面挂了，不影响数据面；数据面本地有配置缓存文件，重启也不影响
+    - 传统（数据库）模式：PostgreSQL 10+ / Cassandra 3.11.x
+        - 部分插件依赖数据库模式，e.g. 限速（集群策略）、OAuth2
+        - 缺点：网关节点既是DP也是CP，安全风险更高；使用Mangager时，性能更差
+    - 无数据库模式：配置存储在节点内存中，通过声明式配置文件提供
+        - 此模式下，Admin API 是只读的
+        - K8s部署时（基于K8s Ingress Controller），配置持久化存储在etcd中
+- **三方组件**
+  - Kong Dashboard
+  - Konga：https://github.com/pantsel/konga - 2020年后不再更新；GUI to Kong Admin API
+  - Kong admin UI：https://github.com/pocketdigi/kong-admin-ui - 2021年后不再更新
+
+## 阿里云 API 网关
+
+官网：https://www.aliyun.com/product/apigateway
+
+![](https://oss-ata.alibaba.com/article/2024/03/85f2801b-eee7-457e-8777-4a0db5ea3d7d.png)
+
+- **简介**
+- **特性**
+  - API 全生命周期管理：设计、开发、测试、发布、售卖、运维监测、安全管控、下线
+  - 集成能力：与阿里云多款云产品深度集成 - 数据服务总线；AI能力输出；数据大屏
+  - 插件机制：插件策略和API分别是独立管理的；插件的绑定、解绑、更新会实时生效，不需要重新发布API
+- **参考**
+  - 文档：https://help.aliyun.com/document_detail/2384699.html
+
+## 阿里云 MSE 云原生网关
+
+官网：https://www.aliyun.com/product/aliware/mse
+
+![](https://oss-ata.alibaba.com/article/2024/03/17207e1c-64e1-4391-ad68-8822340c3ff9.png)
+
+- **简介**
+  - 是阿里云微服务引擎（MSE）产品的一部分
+  - 原生支持 Higress / Nginx / Envoy，遵循 Ingress 标准
+- **特性**
+  - HTTP to Dubbo：https://help.aliyun.com/document_detail/445568.html
+  - 插件扩展：
+![](https://oss-ata.alibaba.com/article/2024/03/706ae8c1-cc23-4eff-9a62-69cc6f0289cd.png)
+- **参考**
+  - 文档：https://help.aliyun.com/zh/mse/product-overview/cloud-native-gateway-overview
+  - 解决方案：https://www.aliyun.com/solution/cloudnative/slcloudnativegateway
+![](https://oss-ata.alibaba.com/article/2024/03/46dd6e2c-9371-4390-977c-c721a29d305e.png)
+
+# 标准规范
+
+## Kubernetes Ingress
+
+Link: [https://kubernetes.io/docs/concepts/services-networking/ingress/](https://kubernetes.io/docs/concepts/services-networking/ingress/)
+
+![](https://oss-ata.alibaba.com/article/2024/03/d9a6a248-4fa0-41dd-8e57-248392288bc1.png)
+
+- **定义**：一个API对象，用于管理外部用户访问运行在 Kubernetes 集群中的服务
+  - 路由规则（rules）：只支持路由 HTTP(S) 流量
+  - 配置项：host（可选）、paths、backend（service + port）
+- **实现**：[Ingress Controllers](https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/)，其中官方支持的有以下三个
+  - AWS Load Balancer Controller：通过 ALB支持 Ingress，通过 NLB 支持Service
+  - Ingress NGINX Controller
+  - GCE L7 load balancer controller（GLBC）
+
+## K8s Gateway API
+
+Link: [https://gateway-api.sigs.k8s.io/](https://gateway-api.sigs.k8s.io/)
+
+![](https://oss-ata.alibaba.com/article/2024/03/5e1dbcd4-5eff-4631-89bc-9adeb44a0cba.png)
+
+- **定义**： Kubernetes Ingress 的下一代，用语解决了当前 Ingress 标准存在的不足
+- **参考**
+  - [Evolving Kubernetes networking with the Gateway API](https://kubernetes.io/blog/2021/04/22/evolving-kubernetes-networking-with-the-gateway-api/)
+  - [[PPT] Evolving the Kubernetes Ingress APIs to GA and Beyond](https://static.sched.com/hosted_files/kccncna19/a5/Kubecon%20San%20Diego%202019%20-%20Evolving%20the%20Kubernetes%20Ingress%20APIs%20to%20GA%20and%20Beyond%20%5BPUBLIC%5D.pdf)
+
+## Istio Gateway
+
+Link: [https://istio.io/latest/docs/reference/config/networking/gateway/](https://istio.io/latest/docs/reference/config/networking/gateway/)
+
+- **定义**：描述了在 Mesh 边缘运行的负载均衡器，用于接收传入或传出的 HTTP/TCP 连接。该规范描述了应暴露的端口集、使用的协议类型、负载平衡器的 SNI 配置等。
+
+# FAQ
+
+> **1. API 网关」 跟传统的「反向代理（Reverse proxy）」 和 「负载均衡器（Load Balancer）」，有什么区别？**
+
+API 网关 = 反向代理 + 负载均衡器 + 更多偏上层的能力与职责（例如：多个后端服务代理、跨服务的聚合请求、认证鉴权、协议转换、API 版本管理 等）。在实际的部署架构中，很多 API 网关虽然内置了反向代理和负载均衡能力，但出于性能、可扩展性和职责分离等角度考虑，往往会前置部署一个 4 层负载均衡，甚至再加一个 7 层反向代理。
+
+例如，在《[Using Zuul in production](https://www.anaplan.com/blog/using-zuul-in-production/)》一文介绍的 Zuul 生产部署案例中，每个 Zuul 实例都前置部署了一个 Nginx 反向代理，负责静态资源缓存、TLS 终止、连接保持、Gzip 压缩等任务；同时，Zuul 集群前面还有一层 HAProxy，用于在多个 Zuul 节点之间实现 4 层负载均衡。
+
+![](https://oss-ata.alibaba.com/article/2024/03/1677abbb-a561-4593-ab7a-9ae2073b6ae3.png)
+
+> **2.「API 网关」跟「服务网格（Service Mesh）」，又有什么联系和区别呢？**
+
+《相爱相杀：Servicemesh和API Gateway关系深度探讨 》这篇文章对两者关系做了深入探讨，总结一下就是：
+
+- API网关：负责 **南北向流量**（North-South Traffic），即 **对外提供服务访问**
+  - 典型API网关是负责处理入流量（**Ingress**）；少数场景也会用于管理出流量（**Egress**）
+  - API网关不只是面向纯粹的外部访问，也可以面向内部的二方服务端调用
+- 服务网格：负责 **东西向流量**（East-West Traffic），即 **服务间的相互访问**（Service-to-Service）
+  - 由于服务网格底层所使用的服务代理（Service Proxy）软件提供的功能与与 API 网关很相似，因此业界也经常将其用于 API 网关场景，例如 [Envoy Gateway](https://github.com/envoyproxy/gateway)
+
+![](https://oss-ata.alibaba.com/article/2024/03/78027860-d341-4113-a021-31fa59aa75c7.png)
+
+# 结语
+
+内容持续更新中... 可点击左侧「👍🏻」按钮，获得更新加速体验。
