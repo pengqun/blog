@@ -1,9 +1,9 @@
 /** @type {import("pliny/config").PlinyConfig } */
 const siteMetadata = {
-  title: "Peng Qun's Blog",
-  author: 'Qun Peng',
+  title: 'pengqun.blog',
+  author: 'pengqun',
   headerTitle: 'pengqun.blog',
-  description: 'A blog is not just a blog, but... ok, just not a blog.',
+  description: 'A blog about software engineering, AI, and more.',
   language: 'en-us',
   theme: 'system', // system, dark or light
   siteUrl: 'https://pengqun.blog',
@@ -12,14 +12,7 @@ const siteMetadata = {
   socialBanner: '/static/images/twitter-card.png',
   email: 'pengqun.pq@gmail.com',
   github: 'https://github.com/pengqun',
-  twitter: 'https://twitter.com/Twitter',
-  facebook: 'https://facebook.com',
-  youtube: 'https://youtube.com',
-  linkedin: 'https://www.linkedin.com',
-  threads: 'https://www.threads.net',
-  instagram: 'https://www.instagram.com',
-  medium: 'https://medium.com',
-  bluesky: 'https://bsky.app/',
+  linkedin: 'https://www.linkedin.com/in/qun-peng-07795237/',
   locale: 'en-US',
   // set to true if you want a navbar fixed to the top
   stickyNav: false,
