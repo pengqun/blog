@@ -9,7 +9,7 @@ const siteMetadata = {
   siteUrl: 'https://pengqun.blog',
   siteRepo: 'https://github.com/pengqun/blog',
   siteLogo: '/static/images/logo.png',
-  socialBanner: '/static/images/twitter-card.png',
+  socialBanner: '/static/images/social-banner.jpg',
   email: 'pengqun.pq@gmail.com',
   github: 'https://github.com/pengqun',
   linkedin: 'https://www.linkedin.com/in/qun-peng-07795237/',
